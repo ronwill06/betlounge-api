@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    container_name: betlounge_db
+    environment:
+      POSTGRES_USER: betlounge
+      POSTGRES_PASSWORD: betlounge
+      POSTGRES_DB: betlounge
+    ports:
+      - "5432:5432"
+    volumes:
+      - betlounge_pg:/var/lib/postgresql/data
+
+volumes:
+  betlounge_pg:
