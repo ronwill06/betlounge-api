@@ -1,6 +1,10 @@
 from pydantic import BaseModel, Field
 
 class PropPickOut(BaseModel):
+    prop_key: str
+    is_best_book: bool
+    book_rank: int
+
     sport: str
     market_group: str
     player_name: str

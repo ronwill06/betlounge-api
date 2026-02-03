@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+
+import traceback
 
 from .db import get_db
 from .models import PropOffer, PropProjection
@@ -132,7 +134,12 @@ def _group_rank_and_sort(raw: list[dict]) -> list[PropPickOut]:
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    # Debug helpers so you can confirm WHICH server/process/code is responding.
+    return {
+        "ok": True,
+        "build": "option-b-grouping-v1",
+        "main_file": __file__,
+    }
 
 
 @app.get("/v1/props/markets", response_model=MarketsOut)
@@ -168,13 +175,20 @@ def top_props(
     db: Session = Depends(get_db),
 ):
     """Option B (multiple books, grouped in UI)."""
-    raw = _build_scored_props_raw(sport=sport, market=market, db=db)
-    scored = _group_rank_and_sort(raw)
+    try:
+        raw = _build_scored_props_raw(sport=sport, market=market, db=db)
+        scored = _group_rank_and_sort(raw)
 
-    # Optional: drop "no edge" picks from the feed
-    # scored = [x for x in scored if x.has_edge]
+        # Optional: drop "no edge" picks from the feed
+        # scored = [x for x in scored if x.has_edge]
 
-    return scored[:limit]
+        return scored[:limit]
+    except Exception as e:
+        # Print full traceback to the uvicorn console.
+        print("/v1/props/top failed:")
+        print(traceback.format_exc())
+        # Also return a short detail string to the client for faster debugging.
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/v1/props/top_best", response_model=list[PropPickOut])
@@ -185,16 +199,21 @@ def top_best_props(
     db: Session = Depends(get_db),
 ):
     """Best-of behavior: one row per prop group (best book only)."""
-    raw = _build_scored_props_raw(sport=sport, market=market, db=db)
-    scored = _group_rank_and_sort(raw)
+    try:
+        raw = _build_scored_props_raw(sport=sport, market=market, db=db)
+        scored = _group_rank_and_sort(raw)
 
-    # Only include picks with an edge.
-    scored = [x for x in scored if x.has_edge]
+        # Only include picks with an edge.
+        scored = [x for x in scored if x.has_edge]
 
-    # Keep only best-book row per prop group.
-    best_only = [x for x in scored if x.is_best_book]
+        # Keep only best-book row per prop group.
+        best_only = [x for x in scored if x.is_best_book]
 
-    # Sort by score desc (ties: confidence, edge_abs)
-    best_only.sort(key=lambda x: (x.score, x.confidence, x.edge_abs), reverse=True)
+        # Sort by score desc (ties: confidence, edge_abs)
+        best_only.sort(key=lambda x: (x.score, x.confidence, x.edge_abs), reverse=True)
 
-    return best_only[:limit]
+        return best_only[:limit]
+    except Exception as e:
+        print("/v1/props/top_best failed:")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
