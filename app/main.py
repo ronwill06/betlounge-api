@@ -9,29 +9,33 @@ from .schemas import PropPickOut, MarketsOut, SearchOut
 
 app = FastAPI(title="BetLounge API", version="0.1.0")
 
-def _build_scored_props(
-    *,
-    sport: str,
-    market: str,
-    db: Session,
-) -> list[PropPickOut]:
+
+def _round2(value: float) -> float:
+    return round(float(value), 2)
+
+
+def _round6(value: float) -> float:
+    return round(float(value), 6)
+
+
+def _build_scored_props_raw(*, sport: str, market: str, db: Session) -> list[dict]:
     offers = db.execute(
         select(PropOffer).where(
             PropOffer.sport == sport,
-            PropOffer.market_group == market
+            PropOffer.market_group == market,
         )
     ).scalars().all()
 
     projections = db.execute(
         select(PropProjection).where(
             PropProjection.sport == sport,
-            PropProjection.market_group == market
+            PropProjection.market_group == market,
         )
     ).scalars().all()
 
     proj_by_player = {p.player_name: p for p in projections}
 
-    scored: list[PropPickOut] = []
+    raw: list[dict] = []
     for o in offers:
         p = proj_by_player.get(o.player_name)
         if not p:
@@ -44,36 +48,92 @@ def _build_scored_props(
             book=o.book,
             line=o.line,
             projection=p.projection,
-            confidence=p.confidence
+            confidence=p.confidence,
         )
 
-        scored.append(PropPickOut(
-            sport=s.sport,
-            market_group=s.market_group,
-            player_name=s.player_name,
-            book=s.book,
-            line=s.line,
-            projection=s.projection,
-            confidence=s.confidence,
-            has_edge=s.has_edge,
-            recommended_side=s.recommended_side,
-            edge=s.edge,
-            edge_abs=s.edge_abs,
-            edge_pct=s.edge_pct,
-            score=s.score,
-            over_label=f"OVER {s.line:.1f}",
-            under_label=f"UNDER {s.line:.1f}",
-        ))
+        prop_key = f"{s.sport}|{s.market_group}|{s.player_name}"
+        line_r2 = _round2(s.line)
 
-    return scored
+        raw.append(
+            {
+                "prop_key": prop_key,
+                "sport": s.sport,
+                "market_group": s.market_group,
+                "player_name": s.player_name,
+                "book": s.book,
+                "line": line_r2,
+                "projection": _round2(s.projection),
+                "confidence": s.confidence,
+                "has_edge": s.has_edge,
+                "recommended_side": s.recommended_side,
+                "edge": _round2(s.edge),
+                "edge_abs": _round2(s.edge_abs),
+                "edge_pct": _round6(s.edge_pct),
+                "score": _round6(s.score),
+                "over_label": f"OVER {line_r2:.1f}",
+                "under_label": f"UNDER {line_r2:.1f}",
+            }
+        )
 
-def _sort_scored_props(scored: list[PropPickOut]) -> list[PropPickOut]:
-    # Sort by blended score desc; if tie, higher confidence, then higher edge_abs
-    return sorted(scored, key=lambda x: (x.score, x.confidence, x.edge_abs), reverse=True)
+    return raw
+
+
+def _group_rank_and_sort(raw: list[dict]) -> list[PropPickOut]:
+    """Option B: group multiple books per prop and mark best book + rank within group."""
+    grouped: dict[str, list[dict]] = {}
+    for item in raw:
+        grouped.setdefault(item["prop_key"], []).append(item)
+
+    out: list[PropPickOut] = []
+    best_score_by_key: dict[str, float] = {}
+
+    for key, items in grouped.items():
+        # Sort within group by score desc, then confidence, then abs edge
+        items.sort(key=lambda x: (x["score"], x["confidence"], x["edge_abs"]), reverse=True)
+        best_score_by_key[key] = items[0]["score"] if items else 0.0
+
+        for idx, item in enumerate(items, start=1):
+            out.append(
+                PropPickOut(
+                    prop_key=item["prop_key"],
+                    is_best_book=(idx == 1),
+                    book_rank=idx,
+                    sport=item["sport"],
+                    market_group=item["market_group"],
+                    player_name=item["player_name"],
+                    book=item["book"],
+                    line=item["line"],
+                    projection=item["projection"],
+                    confidence=item["confidence"],
+                    has_edge=item["has_edge"],
+                    recommended_side=item["recommended_side"],
+                    edge=item["edge"],
+                    edge_abs=item["edge_abs"],
+                    edge_pct=item["edge_pct"],
+                    score=item["score"],
+                    over_label=item["over_label"],
+                    under_label=item["under_label"],
+                )
+            )
+
+    # Sort overall by best-book score per prop_key so one prop doesn't dominate the feed.
+    # Then keep best-book rows above alternates inside the same group.
+    out.sort(
+        key=lambda x: (
+            best_score_by_key.get(x.prop_key, 0.0),
+            1 if x.is_best_book else 0,
+            x.score,
+        ),
+        reverse=True,
+    )
+
+    return out
+
 
 @app.get("/health")
 def health():
     return {"ok": True}
+
 
 @app.get("/v1/props/markets", response_model=MarketsOut)
 def markets(
@@ -85,6 +145,7 @@ def markets(
     ).scalars().all()
     markets = sorted(set(rows))
     return MarketsOut(sport=sport, markets=markets)
+
 
 @app.get("/v1/props/search", response_model=SearchOut)
 def search_players(
@@ -98,6 +159,7 @@ def search_players(
     rows = db.execute(q.distinct()).scalars().all()
     return SearchOut(players=sorted(rows)[:25])
 
+
 @app.get("/v1/props/top", response_model=list[PropPickOut])
 def top_props(
     sport: str = Query(..., min_length=2),
@@ -105,21 +167,15 @@ def top_props(
     limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """
-    MVP behavior:
-    - For the requested sport+market, join offer lines with projections by (sport, market_group, player_name).
-    - Compute score (edgePct * confidence).
-    - Sort descending by score.
-    - Return top N.
-    """
-    scored = _build_scored_props(sport=sport, market=market, db=db)
-    scored = _sort_scored_props(scored)
+    """Option B (multiple books, grouped in UI)."""
+    raw = _build_scored_props_raw(sport=sport, market=market, db=db)
+    scored = _group_rank_and_sort(raw)
 
-    # Optional: for MVP you may want to drop "no edge" picks from Top Props Today.
-    # If you want that behavior, uncomment:
+    # Optional: drop "no edge" picks from the feed
     # scored = [x for x in scored if x.has_edge]
 
     return scored[:limit]
+
 
 @app.get("/v1/props/top_best", response_model=list[PropPickOut])
 def top_best_props(
@@ -128,22 +184,17 @@ def top_best_props(
     limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """
-    Best-of behavior:
-    - Only include picks with an edge.
-    - For each player, keep the single best-scoring book.
-    - Return top N by score.
-    """
-    scored = _build_scored_props(sport=sport, market=market, db=db)
+    """Best-of behavior: one row per prop group (best book only)."""
+    raw = _build_scored_props_raw(sport=sport, market=market, db=db)
+    scored = _group_rank_and_sort(raw)
+
+    # Only include picks with an edge.
     scored = [x for x in scored if x.has_edge]
-    scored = _sort_scored_props(scored)
 
-    best_by_player: list[PropPickOut] = []
-    seen_players: set[str] = set()
-    for pick in scored:
-        if pick.player_name in seen_players:
-            continue
-        seen_players.add(pick.player_name)
-        best_by_player.append(pick)
+    # Keep only best-book row per prop group.
+    best_only = [x for x in scored if x.is_best_book]
 
-    return best_by_player[:limit]
+    # Sort by score desc (ties: confidence, edge_abs)
+    best_only.sort(key=lambda x: (x.score, x.confidence, x.edge_abs), reverse=True)
+
+    return best_only[:limit]
