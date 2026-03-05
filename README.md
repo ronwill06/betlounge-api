@@ -41,7 +41,8 @@ uvicorn app.main:app --reload
 ```
 
 ### Test endpoints
-- http://localhost:8000/health
+- http://localhost:8000/healthz
+- http://localhost:8000/readyz
 - http://localhost:8000/v1/props/top?sport=NBA&market=PRA&limit=10
 - http://localhost:8000/v1/props/markets?sport=NBA
 - http://localhost:8000/v1/props/search?query=LeB
@@ -87,4 +88,5 @@ fly ssh console -C "python -c \"from app.db import SessionLocal; from app.seed i
 fly status
 fly logs
 curl https://<your-app-name>.fly.dev/health
+curl https://<your-app-name>.fly.dev/healthz
 ```

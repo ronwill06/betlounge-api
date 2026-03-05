@@ -1,15 +1,32 @@
-from fastapi import FastAPI, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import select
-
+import os
 import traceback
+
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import PropOffer, PropProjection
+from .schemas import MarketsOut, PropPickOut, SearchOut
 from .scoring import score_pick
-from .schemas import PropPickOut, MarketsOut, SearchOut
+
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+    if not raw:
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()] or ["*"]
+
 
 app = FastAPI(title="BetLounge API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _round2(value: float) -> float:
@@ -134,12 +151,26 @@ def _group_rank_and_sort(raw: list[dict]) -> list[PropPickOut]:
 
 @app.get("/health")
 def health():
-    # Debug helpers so you can confirm WHICH server/process/code is responding.
+    # Backward-compatible endpoint used by existing docs/tooling.
     return {
         "ok": True,
         "build": "option-b-grouping-v1",
         "main_file": __file__,
     }
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz(db: Session = Depends(get_db)):
+    try:
+        db.execute(select(1)).scalar_one()
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
 
 
 @app.get("/v1/props/markets", response_model=MarketsOut)

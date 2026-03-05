@@ -24,6 +24,28 @@ Base URL (local): `http://localhost:8000`
 }
 ```
 
+## `GET /healthz`
+
+### Response 200
+
+```json
+{
+  "ok": true
+}
+```
+
+## `GET /readyz`
+
+Readiness probe that verifies database connectivity.
+
+### Response 200
+
+```json
+{
+  "ok": true
+}
+```
+
 ## `GET /v1/props/markets`
 
 Returns available market groups for a sport.

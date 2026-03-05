@@ -53,6 +53,18 @@ def test_markets_endpoint(client):
     assert payload["markets"] == ["PRA", "Points"]
 
 
+def test_healthz_endpoint(client):
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_readyz_endpoint(client):
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_search_endpoint(client):
     response = client.get("/v1/props/search", params={"query": "LeB", "sport": "NBA"})
     assert response.status_code == 200
