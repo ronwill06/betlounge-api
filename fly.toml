@@ -1,4 +1,4 @@
-app = "betlounge-api"
+app = "betlounge-api-prod"
 primary_region = "iad"
 
 [build]

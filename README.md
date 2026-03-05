@@ -58,12 +58,12 @@ fly auth login
 ```
 fly launch --no-deploy
 ```
-Use app name `betlounge-api` (or update `fly.toml` with your chosen name).
+Use app name `betlounge-api-prod`.
 
 3) Provision Postgres (if you do not already have one)
 ```
 fly postgres create --name betlounge-db
-fly postgres attach --app betlounge-api betlounge-db
+fly postgres attach --app betlounge-api-prod betlounge-db
 ```
 This sets `DATABASE_URL` for your app.
 
@@ -78,6 +78,16 @@ fly deploy
 ```
 Migrations run automatically during deploy via Fly release command (`alembic upgrade head`).
 
+Optional one-shot deploy script (uses app `betlounge-api-prod`):
+```
+./scripts/deploy_fly.sh
+```
+If you want it to also update Fly's `DATABASE_URL` secret from local env:
+```
+export DATABASE_URL='postgresql+psycopg2://USER:PASS@HOST:5432/DBNAME'
+./scripts/deploy_fly.sh
+```
+
 6) Optional: seed sample data
 ```
 fly ssh console -C "python -c \"from app.db import SessionLocal; from app.seed import seed; db=SessionLocal(); seed(db); db.close()\""
@@ -87,6 +97,7 @@ fly ssh console -C "python -c \"from app.db import SessionLocal; from app.seed i
 ```
 fly status
 fly logs
-curl https://<your-app-name>.fly.dev/health
-curl https://<your-app-name>.fly.dev/healthz
+curl https://betlounge-api-prod.fly.dev/health
+curl https://betlounge-api-prod.fly.dev/healthz
+curl https://betlounge-api-prod.fly.dev/readyz
 ```
